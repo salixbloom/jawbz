@@ -1,18 +1,14 @@
-// Vanilla-JS frontend for the Kalthraxius QueryServer. No build step, no
-// framework: this file is served as-is and talks to the same-origin proxy in
-// server.mjs, which forwards /query and /query/stream to the real QueryServer.
+// Vanilla-JS frontend for the Kalthraxius aggregator-query node. No build
+// step, no framework: this file is served as-is and talks to the same-origin
+// proxy in server.mjs, which forwards /search, /jobs and /stats to the node.
 
 const BOOKMARKS_KEY = 'jawbz:bookmarks:v1'
 
 const form = document.getElementById('search-form')
-const stackInput = document.getElementById('stack')
-const yoeMaxInput = document.getElementById('yoeMax')
-const salaryFloorInput = document.getElementById('salaryFloor')
-const locationInput = document.getElementById('location')
+const textInput = document.getElementById('text')
+const platformIdInput = document.getElementById('platformId')
 const limitInput = document.getElementById('limit')
-const includeUnknownInput = document.getElementById('includeUnknown')
 const searchBtn = document.getElementById('search-btn')
-const stopBtn = document.getElementById('stop-btn')
 
 const filterInput = document.getElementById('filter')
 const statusEl = document.getElementById('status')
@@ -29,9 +25,7 @@ const panels = {
   bookmarks: document.getElementById('bookmarks-tab'),
 }
 
-let stream = null
 let results = []
-let seenHashes = new Set()
 let bookmarks = loadBookmarks()
 
 init()
@@ -39,107 +33,82 @@ init()
 function init() {
   tabs.forEach(tab => tab.addEventListener('click', () => selectTab(tab.dataset.tab)))
   form.addEventListener('submit', onSubmit)
-  stopBtn.addEventListener('click', onStop)
   filterInput.addEventListener('input', applyFilter)
   renderBookmarks()
 }
 
 // ---------------------------------------------------------------------------
-// Search lifecycle (SSE streaming via GET /query/stream?q=<base64 profile>)
+// Search lifecycle (single request via POST /search)
 // ---------------------------------------------------------------------------
 
 function onSubmit(event) {
   event.preventDefault()
-  const profile = buildProfile()
-  if (profile.stack.length === 0 && !profile.location && profile.yoeMax === undefined && profile.salaryFloor === undefined) {
-    // Still a valid query (an empty profile returns everything), but nudge the user.
-    setStatus('searching with no filters — this returns everything the network has…')
+  const raw = textInput.value.trim()
+  if (!raw) {
+    setStatus('enter some search text — the API has no empty/browse-all query')
+    return
   }
-  startSearch(profile)
+  const groups = parseBooleanQuery(raw)
+  if (groups.length === 0) {
+    setStatus('enter some search text — the API has no empty/browse-all query')
+    return
+  }
+  runSearch(groups)
 }
 
-function onStop() {
-  closeStream()
-  setStatus(`stopped — ${results.length} result${results.length === 1 ? '' : 's'} so far`)
-  if (results.length === 0) emptyResults.hidden = false
-}
-
-function buildProfile() {
-  const stack = stackInput.value.split(',').map(s => s.trim()).filter(Boolean)
-  const profile = { stack }
-  const yoeMax = numberOrUndefined(yoeMaxInput.value)
-  if (yoeMax !== undefined) profile.yoeMax = yoeMax
-  const salaryFloor = numberOrUndefined(salaryFloorInput.value)
-  if (salaryFloor !== undefined) profile.salaryFloor = salaryFloor
-  const location = locationInput.value.trim()
-  if (location) profile.location = location
-  profile.includeUnknown = includeUnknownInput.checked
-  const limit = numberOrUndefined(limitInput.value)
-  if (limit !== undefined) profile.limit = limit
-  return profile
-}
-
-function startSearch(profile) {
-  closeStream()
+// The API's /search only takes a single opaque `text` string with no documented
+// boolean syntax, so OR is implemented here by issuing one request per
+// OR-branch and merging by contentHash; AND is enforced by re-checking that
+// every AND-term actually appears in the result (the FTS index may rank rather
+// than strictly require all terms).
+async function runSearch(groups) {
   results = []
-  seenHashes = new Set()
   resultsList.innerHTML = ''
   emptyResults.hidden = true
   filterInput.value = ''
   applyFilter()
 
   searchBtn.disabled = true
-  stopBtn.hidden = false
-  setStatus('connecting…')
+  setStatus('searching…')
   selectTab('results')
 
-  const query = encodeURIComponent(toBase64Json(profile))
-  stream = new EventSource(`/query/stream?q=${query}`)
+  const platformId = platformIdInput.value.trim()
+  const limit = numberOrUndefined(limitInput.value)
+  const seen = new Set()
 
-  stream.addEventListener('open', () => setStatus('streaming results…'))
+  try {
+    for (const terms of groups) {
+      const query = { text: terms.join(' ') }
+      if (platformId) query.platformId = platformId
+      if (limit !== undefined) query.limit = limit
 
-  stream.addEventListener('hit', event => {
-    const hit = parseJson(event.data)
-    if (!hit?.contentHash || seenHashes.has(hit.contentHash)) return
-    seenHashes.add(hit.contentHash)
-    results.push(hit)
-    resultsList.appendChild(renderJobCard(hit))
+      const res = await fetch('/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(query),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.error || `search failed (${res.status})`)
+      }
+      const hits = await res.json()
+      for (const hit of hits) {
+        if (!hit?.contentHash || !hit.indexed || seen.has(hit.contentHash)) continue
+        if (!matchesAllTerms(buildSearchText(hit), terms)) continue
+        seen.add(hit.contentHash)
+        results.push(hit)
+        resultsList.appendChild(renderJobCard(hit))
+      }
+    }
     applyFilter()
-    setStatus(`streaming results… ${results.length} so far`)
-  })
-
-  stream.addEventListener('done', event => {
-    const summary = parseJson(event.data) ?? {}
-    const answered = summary.answered?.length ?? 0
-    const failed = summary.failed?.length ?? 0
-    closeStream()
-    setStatus(
-      `done — ${answered} aggregator${answered === 1 ? '' : 's'} answered` +
-        (failed ? `, ${failed} failed` : '') +
-        `, ${results.length} unique result${results.length === 1 ? '' : 's'}`,
-    )
+    setStatus(`done — ${results.length} result${results.length === 1 ? '' : 's'}`)
     if (results.length === 0) emptyResults.hidden = false
-  })
-
-  stream.addEventListener('error', () => {
-    const hadResults = results.length > 0
-    closeStream()
-    setStatus(
-      hadResults
-        ? `connection lost — ${results.length} result${results.length === 1 ? '' : 's'} so far`
-        : 'could not reach the query server — is it running? (see README for setup)',
-    )
+  } catch (err) {
+    setStatus(`could not reach the aggregator-query node — is it running? (see README for setup) — ${err.message}`)
     if (results.length === 0) emptyResults.hidden = false
-  })
-}
-
-function closeStream() {
-  if (stream) {
-    stream.close()
-    stream = null
+  } finally {
+    searchBtn.disabled = false
   }
-  searchBtn.disabled = false
-  stopBtn.hidden = true
 }
 
 // ---------------------------------------------------------------------------
@@ -147,8 +116,8 @@ function closeStream() {
 // ---------------------------------------------------------------------------
 
 function renderJobCard(hit) {
-  const job = hit.job?.job ?? {}
-  const enrichment = hit.job?.enrichment ?? {}
+  const job = hit.indexed?.job ?? {}
+  const enrichment = hit.indexed?.enrichment ?? {}
 
   const li = document.createElement('li')
   li.className = 'job-card'
@@ -185,13 +154,12 @@ function renderJobCard(hit) {
 
   const badges = document.createElement('div')
   badges.className = 'badges'
-  badges.appendChild(qualificationBadge(hit.qualification))
   badges.appendChild(scoreBadge(hit.score))
   const salary = formatSalary(hit)
   if (salary) badges.appendChild(textBadge(`💰 ${salary}`))
   if (enrichment.seniority?.value) badges.appendChild(textBadge(capitalize(enrichment.seniority.value)))
   if (enrichment.yoe?.value != null) badges.appendChild(textBadge(`${enrichment.yoe.value} yoe`))
-  if (hit.postedAgo?.text) badges.appendChild(textBadge(hit.postedAgo.text, 'muted'))
+  if (job.platformId) badges.appendChild(textBadge(job.platformId, 'muted'))
   li.appendChild(badges)
 
   if (job.description) {
@@ -203,12 +171,11 @@ function renderJobCard(hit) {
 
   const skills = enrichment.skills ?? []
   if (skills.length) {
-    const matched = new Set(hit.matchedSkills ?? [])
     const skillRow = document.createElement('div')
     skillRow.className = 'badges'
     for (const skill of skills) {
       const b = document.createElement('span')
-      b.className = 'badge skill' + (matched.has(skill.id) ? ' matched' : '')
+      b.className = 'badge skill'
       b.textContent = skill.label
       skillRow.appendChild(b)
     }
@@ -218,25 +185,8 @@ function renderJobCard(hit) {
   return li
 }
 
-function qualificationBadge(qualification) {
-  const confirmed = qualification === 'confirmed'
-  return textBadge(confirmed ? '✓ confirmed match' : '~ assumed match', confirmed ? 'qual-confirmed' : 'qual-assumed')
-}
-
 function scoreBadge(score) {
-  const pct = Math.round(Math.max(0, Math.min(1, Number(score) || 0)) * 100)
-  const span = document.createElement('span')
-  span.className = 'badge'
-  const label = document.createTextNode(`score ${pct}% `)
-  const track = document.createElement('span')
-  track.className = 'score-bar-track'
-  const fill = document.createElement('span')
-  fill.className = 'score-bar-fill'
-  fill.style.width = `${pct}%`
-  track.appendChild(fill)
-  span.appendChild(label)
-  span.appendChild(track)
-  return span
+  return textBadge(`relevance ${Number(score).toFixed(1)}`)
 }
 
 function textBadge(text, extraClass = '') {
@@ -291,26 +241,56 @@ function renderBookmarks() {
 }
 
 // ---------------------------------------------------------------------------
-// Client-side keyword filter over the currently loaded results — the API has
-// no free-text search, so this fills that gap without needing a server-side DB.
+// Client-side keyword filter over the currently loaded results — narrows what
+// a /search response already returned, without firing another request.
 // ---------------------------------------------------------------------------
 
 function applyFilter() {
-  const query = filterInput.value.trim().toLowerCase()
+  const raw = filterInput.value.trim()
+  const groups = raw ? parseBooleanQuery(raw) : []
   const cards = resultsList.querySelectorAll('.job-card')
   let visible = 0
   cards.forEach(card => {
-    const match = !query || card.dataset.searchText.includes(query)
+    const match = groups.length === 0 || matchesAnyGroup(card.dataset.searchText, groups)
     card.classList.toggle('hidden-by-filter', !match)
     if (match) visible++
   })
-  resultsCount.textContent = results.length ? (query ? `(${visible}/${results.length})` : `(${results.length})`) : ''
+  resultsCount.textContent = results.length ? (raw ? `(${visible}/${results.length})` : `(${results.length})`) : ''
+}
+
+// ---------------------------------------------------------------------------
+// Boolean query parsing — shared by the search box and the results filter.
+//
+// Comma or "OR"/"||" separate OR-branches; within a branch, whitespace or
+// "AND"/"&&" separate terms that must all match. "agile docker, kubernetes"
+// means (agile AND docker) OR kubernetes. Returns an array of term arrays
+// (lowercased), e.g. [["agile","docker"],["kubernetes"]].
+// ---------------------------------------------------------------------------
+
+function parseBooleanQuery(raw) {
+  return raw
+    .split(/\s*(?:,|\bOR\b|\|\|)\s*/i)
+    .map(branch =>
+      branch
+        .split(/\s*(?:\bAND\b|&&|\s+)\s*/i)
+        .map(term => term.trim().toLowerCase())
+        .filter(Boolean),
+    )
+    .filter(terms => terms.length > 0)
+}
+
+function matchesAllTerms(searchText, terms) {
+  return terms.every(term => searchText.includes(term))
+}
+
+function matchesAnyGroup(searchText, groups) {
+  return groups.some(terms => matchesAllTerms(searchText, terms))
 }
 
 function buildSearchText(hit) {
-  const job = hit.job?.job ?? {}
-  const skills = (hit.job?.enrichment?.skills ?? []).map(s => s.label)
-  return [job.title, job.company, job.location, job.platformId, stripHtml(job.description ?? ''), ...skills, ...(hit.matchedSkills ?? [])]
+  const job = hit.indexed?.job ?? {}
+  const skills = (hit.indexed?.enrichment?.skills ?? []).map(s => s.label)
+  return [job.title, job.company, job.location, job.platformId, stripHtml(job.description ?? ''), ...skills]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
@@ -339,27 +319,12 @@ function numberOrUndefined(value) {
   return Number.isFinite(n) ? n : undefined
 }
 
-function parseJson(text) {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return null
-  }
-}
-
-function toBase64Json(obj) {
-  const bytes = new TextEncoder().encode(JSON.stringify(obj))
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
-}
-
 function formatNumber(n) {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n)
 }
 
 function formatSalary(hit) {
-  const extraction = hit.job?.enrichment?.salary?.value
+  const extraction = hit.indexed?.enrichment?.salary?.value
   if (extraction && (extraction.min != null || extraction.max != null)) {
     const currency = extraction.currency ? `${extraction.currency} ` : ''
     const period = extraction.period ? `/${extraction.period}` : ''
@@ -369,7 +334,7 @@ function formatSalary(hit) {
     else range = `up to ${formatNumber(extraction.max)}`
     return `${currency}${range}${period}`
   }
-  return hit.job?.job?.salary || null
+  return hit.indexed?.job?.salary || null
 }
 
 function stripHtml(html) {

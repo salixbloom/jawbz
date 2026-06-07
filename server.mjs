@@ -3,10 +3,12 @@ import { readFile } from 'node:fs/promises'
 import { extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// Where the Kalthraxius QueryServer (the actual job-search API) is listening.
-// Override with KALTHRAXIUS_URL=http://host:port if it runs elsewhere.
-const BACKEND = new URL(process.env.KALTHRAXIUS_URL ?? 'http://127.0.0.1:8080')
-const PORT = Number(process.env.PORT ?? 3000)
+// Where the Kalthraxius aggregator-query node (the actual job-search API) is
+// listening. Override with KALTHRAXIUS_URL=http://host:port if it runs elsewhere.
+const BACKEND = new URL(process.env.KALTHRAXIUS_URL ?? 'http://127.0.0.1:3000')
+// Defaults to 8000, not 3000 — the aggregator-query node's own default port,
+// to avoid a collision when running both locally.
+const PORT = Number(process.env.PORT ?? 8000)
 const PUBLIC_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'public')
 
 const MIME_TYPES = {
@@ -17,10 +19,10 @@ const MIME_TYPES = {
 }
 
 /**
- * The QueryServer doesn't send CORS headers, so the browser can't call it
- * cross-origin. Instead the page talks to this server, which proxies the two
- * query routes through untouched and serves the static frontend for everything
- * else — keeping the browser side a same-origin, framework-free static site.
+ * The aggregator-query node already sends permissive CORS headers, so the
+ * browser could call it directly — but proxying keeps the frontend pointed at
+ * a single same-origin URL regardless of where the backend lives, so the only
+ * thing you configure is KALTHRAXIUS_URL on the server side.
  */
 const server = createServer((req, res) => {
   handleRequest(req, res).catch(err => {
@@ -29,14 +31,20 @@ const server = createServer((req, res) => {
   })
 })
 
+const PROXIED_ROUTES = [
+  { pathname: '/stats', methods: ['GET'] },
+  { pathname: '/jobs', methods: ['GET'] },
+  { pathname: '/search', methods: ['POST'] },
+]
+
 async function handleRequest(req, res) {
   const url = new URL(req.url ?? '/', 'http://localhost')
 
-  if (url.pathname === '/query' && req.method === 'POST') {
-    return proxyToBackend(req, res, '/query')
+  if (PROXIED_ROUTES.some(r => r.pathname === url.pathname && r.methods.includes(req.method ?? ''))) {
+    return proxyToBackend(req, res, `${url.pathname}${url.search}`)
   }
-  if (url.pathname === '/query/stream' && (req.method === 'GET' || req.method === 'POST')) {
-    return proxyToBackend(req, res, `/query/stream${url.search}`)
+  if (/^\/jobs\/[^/]+$/.test(url.pathname) && req.method === 'GET') {
+    return proxyToBackend(req, res, url.pathname)
   }
   return serveStatic(url.pathname, res)
 }
@@ -56,7 +64,7 @@ function proxyToBackend(req, res, path) {
     )
     upstream.on('error', err => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Could not reach the Kalthraxius QueryServer', detail: err.message, backend: BACKEND.origin }))
+      res.end(JSON.stringify({ error: 'Could not reach the Kalthraxius aggregator-query node', detail: err.message, backend: BACKEND.origin }))
       resolve()
     })
     req.pipe(upstream)
@@ -82,5 +90,5 @@ async function serveStatic(pathname, res) {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`jawbz frontend:  http://127.0.0.1:${PORT}`)
-  console.log(`proxying to QueryServer at ${BACKEND.origin}`)
+  console.log(`proxying to aggregator-query node at ${BACKEND.origin}`)
 })

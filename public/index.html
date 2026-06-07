@@ -10,39 +10,24 @@
 <body>
   <header>
     <h1>🦈 jawbz</h1>
-    <p class="tagline">Search live job postings across the Kalthraxius aggregator network</p>
+    <p class="tagline">Full-text search over an aggregator-query node's local job index</p>
   </header>
 
   <form id="search-form">
     <div class="field">
-      <label for="stack">Skills <span class="hint">(comma separated — affects ranking, never hides jobs)</span></label>
-      <input id="stack" placeholder="python, django, postgres" autocomplete="off" />
+      <label for="text">Search <span class="hint">(matches title, company, description — combine terms with AND/&amp;&amp; or OR/||/comma, e.g. "agile AND docker, kubernetes" = (agile AND docker) OR kubernetes)</span></label>
+      <input id="text" placeholder="agile docker, kubernetes" autocomplete="off" />
     </div>
-    <div class="field-row">
+    <div class="field-row actions">
       <div class="field">
-        <label for="yoeMax">Max years of experience</label>
-        <input id="yoeMax" type="number" min="0" placeholder="any" />
-      </div>
-      <div class="field">
-        <label for="salaryFloor">Minimum salary</label>
-        <input id="salaryFloor" type="number" min="0" step="1000" placeholder="any" />
-      </div>
-      <div class="field">
-        <label for="location">Location</label>
-        <input id="location" placeholder="remote or city" autocomplete="off" />
+        <label for="platformId">Platform <span class="hint">(optional)</span></label>
+        <input id="platformId" placeholder="workable" autocomplete="off" />
       </div>
       <div class="field field-narrow">
         <label for="limit">Limit</label>
-        <input id="limit" type="number" min="1" max="200" value="50" />
+        <input id="limit" type="number" min="1" max="1000" placeholder="10" />
       </div>
-    </div>
-    <div class="field-row actions">
-      <label class="checkbox">
-        <input id="includeUnknown" type="checkbox" checked />
-        Include jobs with unknown salary / YOE / location
-      </label>
       <div class="spacer"></div>
-      <button type="button" id="stop-btn" class="secondary" hidden>Stop</button>
       <button type="submit" id="search-btn">Search</button>
     </div>
   </form>
@@ -54,7 +39,7 @@
 
   <section id="results-tab" class="tab-panel">
     <div class="toolbar">
-      <input id="filter" type="search" placeholder="Filter loaded results — title, company, location, skills…" autocomplete="off" />
+      <input id="filter" type="search" placeholder="Filter loaded results — supports AND/&& and OR/||/comma, e.g. agile AND docker, kubernetes" autocomplete="off" />
       <span id="status" class="status"></span>
     </div>
     <p id="empty-results" class="empty">Run a search to see matching jobs here.</p>
