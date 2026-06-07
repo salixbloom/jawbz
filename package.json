@@ -1,0 +1,10 @@
+{
+  "name": "jawbz",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local web frontend for the Kalthraxius QueryServer job-search API",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}

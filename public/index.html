@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>jawbz — job search</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦈</text></svg>" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>🦈 jawbz</h1>
+    <p class="tagline">Search live job postings across the Kalthraxius aggregator network</p>
+  </header>
+
+  <form id="search-form">
+    <div class="field">
+      <label for="stack">Skills <span class="hint">(comma separated — affects ranking, never hides jobs)</span></label>
+      <input id="stack" placeholder="python, django, postgres" autocomplete="off" />
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="yoeMax">Max years of experience</label>
+        <input id="yoeMax" type="number" min="0" placeholder="any" />
+      </div>
+      <div class="field">
+        <label for="salaryFloor">Minimum salary</label>
+        <input id="salaryFloor" type="number" min="0" step="1000" placeholder="any" />
+      </div>
+      <div class="field">
+        <label for="location">Location</label>
+        <input id="location" placeholder="remote or city" autocomplete="off" />
+      </div>
+      <div class="field field-narrow">
+        <label for="limit">Limit</label>
+        <input id="limit" type="number" min="1" max="200" value="50" />
+      </div>
+    </div>
+    <div class="field-row actions">
+      <label class="checkbox">
+        <input id="includeUnknown" type="checkbox" checked />
+        Include jobs with unknown salary / YOE / location
+      </label>
+      <div class="spacer"></div>
+      <button type="button" id="stop-btn" class="secondary" hidden>Stop</button>
+      <button type="submit" id="search-btn">Search</button>
+    </div>
+  </form>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="results">Results <span id="results-count" class="count"></span></button>
+    <button class="tab" data-tab="bookmarks">Bookmarks <span id="bookmarks-count" class="count"></span></button>
+  </nav>
+
+  <section id="results-tab" class="tab-panel">
+    <div class="toolbar">
+      <input id="filter" type="search" placeholder="Filter loaded results — title, company, location, skills…" autocomplete="off" />
+      <span id="status" class="status"></span>
+    </div>
+    <p id="empty-results" class="empty">Run a search to see matching jobs here.</p>
+    <ul id="results" class="job-list"></ul>
+  </section>
+
+  <section id="bookmarks-tab" class="tab-panel" hidden>
+    <p id="empty-bookmarks" class="empty">No bookmarked jobs yet — click ☆ on a result to save it for later.</p>
+    <ul id="bookmarks" class="job-list"></ul>
+  </section>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
