@@ -1,5 +1,4 @@
-# jawbz
-🦈
+# jawbz 🦈
 
 A small local web frontend for searching jobs through a [Kalthraxius](https://github.com/salixbloom/Kalthraxius-the-GitHub-Repository)
 `QueryServer` — the HTTP gateway that fans a query out to the P2P aggregator
